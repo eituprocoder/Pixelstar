@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pixelstar - Advanced RL Engine</title>
+<script src="https://unpkg.com/brain.js"></script>
+
+<style>
+:root { 
+    --neon-cyan: #00f3ff; 
+    --neon-purple: #bc13fe; 
+    --bg-space: #05020f; 
+    --gold: #ffd700;
+    --candy: #ff69b4;
+}
+
+body { 
+    margin: 0; background: var(--bg-space); color: white; 
+    font-family: 'Courier New', monospace; display: flex; height: 100vh; overflow: hidden; 
+}
+
+/* SIDEBAR Y CHAT */
+#sidebar { 
+    width: 320px; background: #0a0a0a; border-right: 2px solid var(--neon-purple); 
+    padding: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 100;
+    box-shadow: 5px 0 20px rgba(188, 19, 254, 0.2);
+}
+
+.logo { text-align: center; margin-bottom: 5px; }
+.logo h1 { margin: 0; font-size: 28px; text-shadow: 0 0 10px var(--neon-cyan); color: #fff; }
+.logo span { color: var(--neon-purple); font-size: 10px; letter-spacing: 2px; }
+
+#chat-display { 
+    height: 100px; overflow-y: auto; font-size: 11px; color: var(--neon-cyan); 
+    background: #000; padding: 10px; border: 1px solid #333; border-radius: 5px; 
+}
+#chat-input { 
+    background: #111; color: #fff; border: 1px solid var(--neon-purple); 
+    padding: 8px; font-size: 12px; border-radius: 4px; outline: none; 
+}
+
+textarea { 
+    height: 100px; background: #000; color: #aaa; border: 1px solid #333; 
+    font-size: 10px; border-radius: 5px; padding: 5px; resize: none;
+}
+.btn-main { 
+    background: transparent; color: var(--neon-cyan); border: 2px solid var(--neon-cyan); 
+    padding: 10px; cursor: pointer; font-weight: bold; border-radius: 5px; 
+    transition: 0.3s; text-transform: uppercase;
+}
+.btn-main:hover { background: var(--neon-cyan); color: #000; }
+.btn-spawn { border-color: var(--neon-purple); color: var(--neon-purple); }
+.btn-spawn:hover { background: var(--neon-purple); color: #fff; }
+
+/* GRID DE JUEGO */
+#grid { 
+    flex-grow: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); 
+    gap: 15px; padding: 15px; overflow-y: auto; 
+}
+
+.game-slot { 
+    background: #111; border: 2px solid var(--neon-cyan); border-radius: 10px; 
+    height: 520px; position: relative; overflow: hidden; display: flex; flex-direction: column; 
+}
+.slot-header { 
+    background: #1a1a1a; padding: 5px 10px; display: flex; 
+    justify-content: space-between; align-items: center; font-size: 12px; border-bottom: 1px solid var(--neon-purple); 
+}
+iframe { width: 100%; flex-grow: 1; border: none; background: #000; pointer-events: auto; }
+
+/* VISOR DE IA & CONTROLES */
+.ai-dashboard { padding: 10px; background: #000; border-top: 1px solid #333; font-size: 11px; display: flex; flex-direction: column; gap: 8px;}
+.dash-row { display: flex; justify-content: space-between; align-items: center; }
+
+.btn-rl { padding: 4px 8px; font-weight: bold; cursor: pointer; border-radius: 4px; font-size: 10px; border: none; }
+.btn-rl.good { background: #1a3a1a; color: #0f0; border: 1px solid #0f0; }
+.btn-rl.bad { background: #3a1a1a; color: #f00; border: 1px solid #f00; }
+.ptr-input { width: 35px; background: #111; color: var(--neon-cyan); border: 1px solid var(--neon-cyan); text-align: center; border-radius: 3px;}
+
+.finger { 
+    position: absolute; width: 16px; height: 16px; border-radius: 50%; 
+    background: radial-gradient(circle, #fff 0%, var(--neon-cyan) 100%);
+    box-shadow: 0 0 10px var(--neon-cyan); transform: translate(-50%, -50%); 
+    z-index: 1000; pointer-events: none; opacity: 0.8; transition: transform 0.1s;
+}
+.finger.click { transform: translate(-50%, -50%) scale(0.6); background: radial-gradient(circle, #fff 0%, var(--neon-purple) 100%); }
+
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+    <div class="logo">
+        <h1>PIXELSTAR</h1>
+        <span>ADVANCED RL & HIVE MIND</span>
+    </div>
+    
+    <div id="chat-display"><b>Pixelstar:</b> Red neuronal lista. Modo enjambre (Hive) activado.</div>
+    <input type="text" id="chat-input" placeholder="Comandos (ej: hola)..." onkeypress="if(event.key==='Enter') chat()">
+    
+    <button class="btn-main" onclick="document.getElementById('f-in').click()">📂 CARGAR HTML</button>
+    <input type="file" id="f-in" style="display:none" onchange="readFile(this)">
+    <textarea id="ed" placeholder="Código del juego aquí..."></textarea>
+    
+    <button class="btn-main btn-spawn" onclick="spawn()">🚀 DEPLOY AGENTE</button>
+</div>
+
+<div id="grid"></div>
+
+<script>
+// ==========================================
+// ESTADO GLOBAL Y MEMORIA
+// ==========================================
+let memory = JSON.parse(localStorage.getItem('pixelstar_mem')) || {};
+let crownedNetworkJSON = JSON.parse(localStorage.getItem('pixelstar_crowned')) || null;
+let activeAgents = {}; // Diccionario con los datos y redes de cada agente
+
+const speechCooldowns = {};
+
+function hablar(texto, id = 'global') {
+    const now = Date.now();
+    // Prevenir spam de voz (enfriamiento de 4 segundos por canal)
+    if (speechCooldowns[id] && now - speechCooldowns[id] < 4000) return;
+    
+    speechCooldowns[id] = now;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(texto);
+    u.lang = 'es-ES'; u.pitch = 0.9; u.rate = 1.2;
+    window.speechSynthesis.speak(u);
+}
+
+function chat() {
+    const input = document.getElementById('chat-input');
+    const display = document.getElementById('chat-display');
+    const val = input.value.trim();
+    if(!val) return;
+    
+    display.innerHTML += `<div><b style="color:#fff;">Tú:</b> ${val}</div>`;
+    
+    if(val.includes('=')) {
+        const [k, v] = val.split('=').map(s => s.trim().toLowerCase());
+        memory[k] = v;
+        localStorage.setItem('pixelstar_mem', JSON.stringify(memory));
+        display.innerHTML += `<div><b>Pixelstar:</b> Asimilado: ${k} = ${v}</div>`;
+    } else {
+        const resp = memory[val.toLowerCase()] || "Datos insuficientes. Procediendo a inferencia básica.";
+        display.innerHTML += `<div><b>Pixelstar:</b> ${resp}</div>`;
+        hablar(resp);
+    }
+    input.value = "";
+    display.scrollTop = display.scrollHeight;
+}
+
+function readFile(input) {
+    const file = input.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => document.getElementById('ed').value = e.target.result;
+        reader.readAsText(file);
+    }
+}
+
+// ==========================================
+// MOTOR DE RED NEURONAL (BRAIN.JS)
+// ==========================================
+function createAgentNetwork() {
+    const net = new brain.NeuralNetwork();
+    if (crownedNetworkJSON) {
+        net.fromJSON(crownedNetworkJSON); // Heredar la red del rey
+    } else {
+        // Entrenamiento base si no hay rey
+        net.train([
+            { input: { targetPresent: 1 }, output: { doClick: 1, doWait: 0 } },
+            { input: { targetPresent: 0 }, output: { doClick: 0, doWait: 1 } }
+        ]);
+    }
+    return net;
+}
+
+// Coronar a la IA más exitosa
+function crownAgent(id) {
+    if(!activeAgents[id]) return;
+    const netJSON = activeAgents[id].net.toJSON();
+    localStorage.setItem('pixelstar_crowned', JSON.stringify(netJSON));
+    crownedNetworkJSON = netJSON;
+    
+    alert(`👑 Agente ${id} Coronado. Su memoria ha sido guardada en LocalStorage.`);
+    hablar(`Nuevo líder coronado. ADN guardado.`);
+    document.getElementById(`chat-display`).innerHTML += `<div style="color:var(--gold);"><b>[SISTEMA]</b> ADN del Agente ${id} guardado como genoma principal.</div>`;
+}
+
+// Sistema de Refuerzo Masivo (+10 / -10)
+function applyReward(id, amount) {
+    if(!activeAgents[id] || !activeAgents[id].lastInput) return;
+    const agent = activeAgents[id];
+    
+    agent.candies += amount;
+    document.getElementById(`candy-${id}`).innerText = agent.candies;
+    
+    let desiredOutput;
+    
+    if(amount > 0) {
+        // PREMIO: Reforzar la acción que acaba de hacer
+        desiredOutput = agent.lastOutput;
+        hablar("Recompensa asimilada. Reforzando sinapsis.", id);
+    } else {
+        // CASTIGO: Invertir la acción
+        desiredOutput = agent.lastOutput.doClick > 0.5 
+            ? { doClick: 0, doWait: 1 } // Si hizo clic, dile que espere
+            : { doClick: 1, doWait: 0 }; // Si esperó, dile que haga clic
+        hablar("Error detectado. Recalibrando parámetros.", id);
+    }
+
+    // Re-entrenar la red neuronal en vivo con este nuevo dato
+    agent.net.train([{ input: agent.lastInput, output: desiredOutput }], { iterations: 50 });
+}
+
+// ==========================================
+// SPAWN Y LÓGICA DE AGENTE
+// ==========================================
+function spawn() {
+    const html = document.getElementById('ed').value;
+    if(!html) return alert("Carga un juego primero.");
+    
+    const id = "STAR_" + Math.random().toString(36).substr(2, 4).toUpperCase();
+    const div = document.createElement('div');
+    div.className = 'game-slot'; div.id = id;
+    
+    div.innerHTML = `
+        <div class="slot-header">
+            <span style="color:var(--neon-cyan)">⚡ ${id}</span>
+            <div>
+                <button title="Coronar ADN" onclick="crownAgent('${id}')" style="background:none; border:none; cursor:pointer; font-size:16px;">👑</button>
+                <button onclick="document.getElementById('${id}').remove()" style="background:none; border:none; color:red; cursor:pointer; font-weight:bold; font-size:14px; margin-left:5px;">X</button>
+            </div>
+        </div>
+        <div id="fingers-container-${id}"></div>
+        <iframe id="i-${id}" srcdoc='${html.replace(/'/g,"&apos;")}'></iframe>
+        
+        <div class="ai-dashboard">
+            <div class="dash-row">
+                <span style="color:var(--gold)">Predicción: <span id="pred-${id}">...</span></span>
+                <span>Punteros: <input type="number" id="ptrs-${id}" class="ptr-input" value="1" min="1" max="10"></span>
+            </div>
+            <div class="dash-row">
+                <span style="color:#888;">Acción: <span id="act-${id}">Ninguna</span></span>
+                <span>
+                    <button class="btn-rl good" onclick="applyReward('${id}', 10)">+10🍬</button>
+                    <b style="color:var(--candy); margin:0 5px;" id="candy-${id}">0</b>
+                    <button class="btn-rl bad" onclick="applyReward('${id}', -10)">-10🍬</button>
+                </span>
+            </div>
+        </div>
+    `;
+    
+    document.getElementById('grid').appendChild(div);
+    const ifr = document.getElementById(`i-${id}`);
+    
+    // Inicializar datos del agente
+    activeAgents[id] = {
+        net: createAgentNetwork(),
+        candies: 0,
+        lastInput: null,
+        lastOutput: null,
+        currentPointers: 0
+    };
+
+    ifr.onload = () => startAI(id);
+    hablar("Agente en línea.", id);
+}
+
+function startAI(id) {
+    const ifr = document.getElementById(`i-${id}`);
+    const predText = document.getElementById(`pred-${id}`);
+    const actText = document.getElementById(`act-${id}`);
+    const fingersContainer = document.getElementById(`fingers-container-${id}`);
+    
+    const agent = activeAgents[id];
+
+    // Frases para el TTS
+    const frasesAtaque = ["Detecto objetivos, ejecutando toque.", "Desplegando multi-puntero sobre el blanco.", "Atacando coordenadas."];
+    const frasesEspera = ["Área despejada. Escaneando.", "Analizando entorno, esperando...", "No hay amenaza visible."];
+
+    const loop = () => {
+        if(!document.getElementById(id)) { delete activeAgents[id]; return; }
+        
+        const doc = ifr.contentWindow.document;
+        
+        // --- 1. GESTIÓN DE MULTI-PUNTEROS ---
+        const reqPointers = parseInt(document.getElementById(`ptrs-${id}`).value) || 1;
+        if (agent.currentPointers !== reqPointers) {
+            fingersContainer.innerHTML = '';
+            for(let i=0; i<reqPointers; i++) {
+                const f = document.createElement('div');
+                f.className = 'finger';
+                f.id = `f-${id}-${i}`;
+                fingersContainer.appendChild(f);
+            }
+            agent.currentPointers = reqPointers;
+        }
+
+        // --- 2. EXTRACCIÓN DE DATOS (VISIÓN) ---
+        const targets = doc.querySelectorAll('button, .target, .enemy, .coin, canvas');
+        let envInput = { targetPresent: targets.length > 0 ? 1 : 0 };
+        
+        agent.lastInput = envInput;
+
+        // --- 3. INFERENCIA BRAIN.JS ---
+        const decision = agent.net.run(envInput);
+        predText.innerText = `Clic: ${(decision.doClick*100).toFixed(0)}% | Espera: ${(decision.doWait*100).toFixed(0)}%`;
+
+        // --- 4. EJECUCIÓN Y ACCIÓN ---
+        if (decision.doClick > decision.doWait && targets.length > 0) {
+            agent.lastOutput = { doClick: 1, doWait: 0 };
+            actText.innerText = `Clic Múltiple (x${reqPointers})`;
+            actText.style.color = "var(--neon-purple)";
+            
+            // Asignar cada puntero a un objetivo aleatorio
+            for(let i=0; i<agent.currentPointers; i++) {
+                const finger = document.getElementById(`f-${id}-${i}`);
+                const target = targets[Math.floor(Math.random() * targets.length)];
+                
+                if (target && finger) {
+                    const rect = target.getBoundingClientRect();
+                    const tx = rect.left + rect.width / 2;
+                    const ty = rect.top + rect.height / 2;
+                    
+                    finger.style.left = tx + 'px';
+                    finger.style.top = ty + 'px';
+                    finger.classList.add('click');
+                    
+                    setTimeout(() => finger.classList.remove('click'), 150);
+                    
+                    // Simular toque
+                    target.click();
+                    try {
+                        const t = new Touch({identifier:Date.now(), target:target, clientX:tx, clientY:ty});
+                        target.dispatchEvent(new TouchEvent('touchstart', {touches:[t], bubbles:true}));
+                    } catch(e) {}
+                }
+            }
+            
+            hablar(frasesAtaque[Math.floor(Math.random() * frasesAtaque.length)], id);
+
+        } else {
+            agent.lastOutput = { doClick: 0, doWait: 1 };
+            actText.innerText = "Escaneando...";
+            actText.style.color = "#888";
+            
+            hablar(frasesEspera[Math.floor(Math.random() * frasesEspera.length)], id);
+        }
+        
+        // Bucle (ligeramente más pausado para dar tiempo a ver el refuerzo)
+        setTimeout(loop, 600);
+    };
+    
+    setTimeout(loop, 1000);
+}
+</script>
+</body>
+</html>
